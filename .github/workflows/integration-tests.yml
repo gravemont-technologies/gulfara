@@ -1,0 +1,36 @@
+name: Integration Tests (Firestore emulator)
+
+on:
+  push:
+    branches: [ main, feature/* ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  integration:
+    name: Emulator-backed integration
+    runs-on: ubuntu-latest
+    env:
+      # Public Clerk JWKS used for test verification (override in repo secrets if needed)
+      CLERK_JWKS_URL: https://glowing-stud-76.clerk.accounts.dev/.well-known/jwks.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21 (required by firebase-tools emulator)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run integration tests
+        run: npm run test:integration
