@@ -67,13 +67,13 @@ export const firestorePersistence: ReviewPersistence = {
         }
       }
 
-      // Write/merge SRS payload
-      tx.set(srsRef, srsPayload(userId, cardId, srs), { merge: true })
-
-      // Read current points and update
+      // Read current points before performing writes (Firestore transaction requirement)
       const pointsSnap = await tx.get(pointsRef)
       const previous = Number(pointsSnap.data()?.points ?? 0)
       const next = previous + Math.max(points ?? 0, 0)
+
+      // Write/merge SRS payload after reads
+      tx.set(srsRef, srsPayload(userId, cardId, srs), { merge: true })
       tx.set(pointsRef, { points: next, updatedAt: new Date().toISOString() }, { merge: true })
 
       // Record idempotency if requestId provided
