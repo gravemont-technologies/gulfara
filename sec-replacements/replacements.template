@@ -1,0 +1,15 @@
+# Template for git-filter-repo / BFG replacements.
+# DO NOT commit actual secret values into this repo.
+# Fill the right-hand side in your local copy before running git-filter-repo or BFG.
+# Example format for git-filter-repo --replace-text (each line either "literal" or "old==>new"):
+#
+# Replace exact string occurrences (example):
+# sk-OLDKEYEXAMPLE==>REDACTED_OPENAI_KEY
+# SUPABASE_SERVICE_ROLE_KEY_OLD==>REDACTED_SUPABASE_SERVICE_ROLE_KEY
+#
+# Save this file locally as `replacements.txt` (with real secret values filled in),
+# then run:
+#   git clone --mirror <repo-url> repo.git
+#   cd repo.git
+#   git filter-repo --replace-text ../replacements.txt
+#   git push --force

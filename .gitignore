@@ -3,7 +3,9 @@
 .env.local
 .env.production
 .env.development
-backend.env
+firebase-admin-key.json
+firebase-admin-key.*
+.firebase/
 
 # Logs
 logs
@@ -30,3 +32,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Generated artifacts to ignore
+.specstory/
+.cursor/
+.test-reports/

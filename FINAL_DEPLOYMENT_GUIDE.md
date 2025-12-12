@@ -4,14 +4,14 @@
 
 ### 1. Environment Variables Setup
 
-#### Frontend Environment (.env.local)
+#### Frontend Environment (.env)
 ```env
 # Supabase (Public - Safe for browser)
 VITE_SUPABASE_URL=https://klcarivgzhwzghggnsga.supabase.co
 VITE_SUPABASE_ANON_KEY=your_supabase_anon_key_here
 
 # Clerk (Public - Safe for browser)
-VITE_CLERK_PUBLISHABLE_KEY=pk_test_cXVhbGl0eS1tYW4tOTEuY2xlcmsuYWNjb3VudHMuZGV2JA
+VITE_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
 
 # OpenAI (Public - Safe for browser)
 VITE_OPENAI_API_KEY=your_openai_api_key_here
@@ -20,14 +20,14 @@ VITE_OPENAI_API_KEY=your_openai_api_key_here
 VITE_APP_BASE_URL=http://localhost:5173
 ```
 
-#### Backend Environment (backend.env)
+#### Backend Environment (`.env` consolidated)
 ```env
 # Supabase (Private - Server only)
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtsY2FyaXZnemh3emdoZ2duc2dhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTkwMjA0NSwiZXhwIjoyMDc1NDc4MDQ1fQ.3FgSpWQalfXuMbq9fEkOSGV40_ERX-3WeKDSo4sxWyA
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 
 # Clerk (Private - Server only)
-CLERK_SECRET_KEY=sk_test_JJ9obt2woi8gpnbwKUmxPOdqGx7422nc3GWOGwjPkW
-CLERK_WEBHOOK_SECRET=whsec_7SUy6+mgf3074EIQrrG8w5TZLIFZaizE
+CLERK_SECRET_KEY=your_clerk_secret_key
+CLERK_WEBHOOK_SECRET=your_clerk_webhook_secret
 
 # OpenAI (Private - Server only)
 OPENAI_API_KEY=your_openai_api_key_here

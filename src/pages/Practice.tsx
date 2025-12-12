@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card, CardContent } from '@/components/ui/card';
@@ -16,8 +16,20 @@ import {
   Target
 } from 'lucide-react';
 import GulfaraFlashcard from '@/components/GulfaraFlashcard';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { srsEngine, type SRSData, type ReviewResult } from '@/services/srsEngine';
-import { aiAdapter, type UserPerformance } from '@/services/aiAdapter';
+import type { FlashcardContext } from '@/services/aiAdapter';
+import { useProfile } from '@/contexts/ProfileContext';
+import { usePrefetchedDeck } from '@/hooks/usePrefetchedDeck';
+import type { PrefetchedDeck } from '@/services/deckPrefetcher';
+import type { ProfileRecord } from '@/hooks/useEnsureProfile';
+import { useSupabaseClient } from '@/supabase/client';
+import { queueAction } from '@/services/sync';
+import { ensureDeckForProfile, getLearningGoals, getPreferredDifficulty } from '@/services/deckManager';
+import { useToast } from '@/hooks/use-toast';
+import { offlineQueue, flushQueuedReviews } from '@/lib/offlineQueue';
+import { ReviewRequestPayload, ReviewResponsePayload } from '@/lib/validation';
+import { logger } from '@/lib/logger';
 
 interface PracticeSession {
   cards: SRSData[];
@@ -29,9 +41,50 @@ interface PracticeSession {
   points: number;
 }
 
-export default function Practice() {
+const createReviewId = () => {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `review-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+interface PracticeOverrides {
+  profile: ProfileRecord;
+  deck: PrefetchedDeck;
+}
+
+interface PracticeProps {
+  overrides?: PracticeOverrides;
+}
+
+function PracticeContent({ overrides }: PracticeProps = {}) {
   const { scenario } = useParams<{ scenario: string }>();
   const navigate = useNavigate();
+  const overrideActive = Boolean(overrides);
+
+  const profileContext = !overrideActive ? useProfile() : null;
+  const { toast } = useToast();
+  const supabase = overrideActive ? null : useSupabaseClient();
+
+  const deckResponse = overrideActive
+    ? {
+        deck: overrides!.deck,
+        loading: false,
+        source: 'prefetched' as const,
+        hasCards: overrides!.deck.cards.length > 0,
+        refresh: async () => {},
+        error: null,
+      }
+    : usePrefetchedDeck(scenario);
+
+  const deck = deckResponse.deck;
+  const deckLoading = deckResponse.loading;
+  const deckSource = deckResponse.source;
+  const hasCards = deckResponse.hasCards;
+  const refresh = deckResponse.refresh;
+  const deckCards = deck?.cards ?? [];
+  const baseProfile = overrides?.profile ?? profileContext?.profile;
   
   const [session, setSession] = useState<PracticeSession>({
     cards: [],
@@ -42,54 +95,200 @@ export default function Practice() {
     streak: 0,
     points: 0
   });
-  
   const [isLoading, setIsLoading] = useState(true);
   const [showResults, setShowResults] = useState(false);
   const [sessionComplete, setSessionComplete] = useState(false);
+  const [answers, setAnswers] = useState<ReviewResult[]>([]);
+  const [offlineQueueLength, setOfflineQueueLength] = useState(() => offlineQueue.getAll().length);
 
-  const loadPracticeSession = async () => {
-    setIsLoading(true);
-    
-    // TODO: Load real cards from Supabase based on scenario
-    const mockCards: SRSData[] = [
-      {
-        cardId: '1',
-        userId: 'user1',
-        ease: 2.5,
-        interval: 1,
-        repetitions: 0,
-        lastReview: new Date(),
-        nextReview: new Date(),
-        quality: 0
-      },
-      {
-        cardId: '2',
-        userId: 'user1',
-        ease: 2.3,
-        interval: 3,
-        repetitions: 2,
-        lastReview: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
-        nextReview: new Date(),
-        quality: 0
+  const refreshOfflineQueueLength = useCallback(() => {
+    setOfflineQueueLength(offlineQueue.getAll().length);
+  }, []);
+
+  const REVIEW_ENDPOINT = '/api/review';
+  const REVIEW_MAX_ATTEMPTS = 3;
+  const REVIEW_BACKOFF_MS = 250;
+
+  const submitReviewPayload = useCallback(async (payload: ReviewRequestPayload): Promise<ReviewResponsePayload> => {
+    for (let attempt = 1; attempt <= REVIEW_MAX_ATTEMPTS; attempt++) {
+      const response = await fetch(REVIEW_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-gulfara-user-id': baseProfile?.id ?? ''
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) {
+        return response.json();
       }
-    ];
 
-    setSession(prev => ({
-      ...prev,
-      cards: mockCards,
-      currentIndex: 0
-    }));
-    
-    setIsLoading(false);
-  };
+      const errorText = await response.text();
+      if (attempt === REVIEW_MAX_ATTEMPTS) {
+        throw new Error(errorText || `Review request failed (${response.status})`);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, Math.pow(2, attempt) * REVIEW_BACKOFF_MS));
+    }
+
+    throw new Error('Review request failed');
+  }, []);
+
+  const recordProgress = useCallback(async (srsCard: SRSData, deckCard: { id: string }, result: ReviewResult) => {
+    if (!supabase || overrideActive || !baseProfile) return;
+    const payload = {
+      user_id: baseProfile.id,
+      card_id: deckCard.id,
+      ease: srsCard.ease,
+      interval: srsCard.interval,
+      repetitions: srsCard.repetitions,
+      quality: result.quality,
+      last_review: srsCard.lastReview.toISOString(),
+      next_review: srsCard.nextReview.toISOString(),
+      mastery: srsEngine.calculateMastery(srsCard),
+    };
+
+    try {
+      await supabase.from('user_progress').upsert(payload);
+    } catch (error) {
+      console.warn('Failed to persist user progress, queuing', error);
+      await queueAction({ type: 'update_progress', data: payload });
+    }
+  }, [baseProfile, supabase, overrideActive]);
+
+  const updateProfileStats = useCallback(async (pointsEarned: number, streak: number) => {
+    if (!supabase || overrideActive || !baseProfile) return;
+    const setProfile = overrideActive ? () => {} : profileContext!.setProfile;
+    const payload = {
+      coins: (baseProfile.coins ?? 0) + pointsEarned,
+      total_points: (baseProfile.total_points ?? 0) + pointsEarned,
+      streak: Math.max(baseProfile.streak ?? 0, streak),
+    };
+
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .update(payload)
+        .eq('id', baseProfile.id)
+        .select()
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      if (data) {
+        setProfile({
+          ...baseProfile,
+          ...data,
+        });
+      }
+    } catch (error) {
+      console.warn('Failed to update profile stats, queuing', error);
+      await queueAction({
+        type: 'update_profile_stats',
+        data: {
+          id: baseProfile.id,
+          ...payload,
+        },
+      });
+    }
+  }, [baseProfile, profileContext, overrideActive, supabase]);
+
+  const recordStudySession = useCallback(async (stats: { correct: number; incorrect: number; points: number; durationSeconds: number; categories: string[]; difficultyLevel: string }) => {
+    if (!supabase || overrideActive || !baseProfile) return;
+
+    const accuracy = stats.correct + stats.incorrect > 0
+      ? Math.round((stats.correct / (stats.correct + stats.incorrect)) * 100)
+      : 0;
+
+    const sessionPayload = {
+      user_id: baseProfile.id,
+      category_id: scenario ?? stats.categories[0] ?? null,
+      session_type: 'mixed',
+      cards_studied: stats.correct + stats.incorrect,
+      correct_answers: stats.correct,
+      incorrect_answers: stats.incorrect,
+      time_spent: stats.durationSeconds,
+      points_earned: stats.points,
+      accuracy,
+      completed_at: new Date().toISOString(),
+    };
+
+    try {
+      await supabase.from('study_sessions').insert(sessionPayload);
+    } catch (error) {
+      console.warn('Failed to record study session, queuing', error);
+      await queueAction({
+        type: 'insert_session',
+        data: sessionPayload,
+      });
+    }
+
+    await updateProfileStats(stats.points, session.streak);
+
+    try {
+      await ensureDeckForProfile(supabase, {
+        ...baseProfile,
+        coins: (baseProfile.coins ?? 0) + stats.points,
+        total_points: (baseProfile.total_points ?? 0) + stats.points,
+        streak: Math.max(baseProfile.streak ?? 0, session.streak),
+      }, {
+        categories: stats.categories,
+        difficultyLevel: stats.difficultyLevel,
+        learningGoals: getLearningGoals(baseProfile),
+        force: true,
+      });
+      await refresh();
+    } catch (error) {
+      console.warn('Deck regeneration after session failed', error);
+    }
+  }, [baseProfile, overrideActive, scenario, session.streak, supabase, updateProfileStats, refresh]);
 
   useEffect(() => {
-    loadPracticeSession();
-  }, [scenario]);
+    if (!baseProfile) {
+      return;
+    }
 
-  const handleAnswer = async (correct: boolean, timeSpent: number) => {
+    if (deckLoading) {
+      setIsLoading(true);
+      return;
+    }
+
+    const now = new Date();
+    const srsCards: SRSData[] = deckCards.map((card) => ({
+      cardId: card.id,
+      userId: baseProfile.id,
+      ease: 2.5,
+      interval: 1,
+      repetitions: 0,
+      lastReview: now,
+      nextReview: now,
+      quality: 0,
+    }));
+
+    setSession({
+      cards: srsCards,
+      currentIndex: 0,
+      correct: 0,
+      incorrect: 0,
+      startTime: now,
+      streak: 0,
+      points: 0,
+    });
+    setShowResults(false);
+    setSessionComplete(false);
+    setAnswers([]);
+    setIsLoading(false);
+  }, [baseProfile, deckCards, deckLoading]);
+
+  const currentDeckCard = useMemo(() => deckCards[session.currentIndex], [deckCards, session.currentIndex]);
+
+  const handleAnswer = async (correct: boolean, timeSpent: number, _cardContext: FlashcardContext) => {
+    if (!baseProfile) return;
     const currentCard = session.cards[session.currentIndex];
-    if (!currentCard) return;
+    if (!currentCard || !currentDeckCard) return;
 
     // Update session stats
     const newCorrect = correct ? session.correct + 1 : session.correct;
@@ -97,6 +296,8 @@ export default function Practice() {
     const newStreak = correct ? session.streak + 1 : 0;
     const pointsEarned = correct ? 10 + (newStreak * 5) : 2;
     const newPoints = session.points + pointsEarned;
+    const isLastCard = session.currentIndex >= session.cards.length - 1;
+    const sessionStart = session.startTime;
 
     // Process with SRS engine
     const reviewResult: ReviewResult = {
@@ -106,20 +307,48 @@ export default function Practice() {
       correct
     };
 
-    const updatedCard = srsEngine.processReview(currentCard, reviewResult);
+    const reviewId = createReviewId();
 
-    // Update AI adaptation
-    const performance: UserPerformance = {
-      userId: currentCard.userId,
-      lastResult: correct,
-      avgScore: newCorrect / (newCorrect + newIncorrect),
-      targetDifficulty: srsEngine.calculateDifficulty(updatedCard),
-      recentAnswers: [
-        { correct, timeSpent, difficulty: srsEngine.calculateDifficulty(updatedCard) }
-      ]
+    const reviewPayload: ReviewRequestPayload = {
+      userId: baseProfile.id,
+      cardId: currentDeckCard.id,
+      quality: reviewResult.quality,
+      timeSpent,
+      correct,
+      pointsEarned,
+      reviewId
     };
 
-    const aiAdjustment = await aiAdapter.adjustDifficulty(performance);
+    let updatedCard = currentCard;
+    try {
+      const reviewBody = await submitReviewPayload(reviewPayload);
+      const serverSrs = reviewBody.srsData;
+      if (serverSrs) {
+        updatedCard = {
+          ...currentCard,
+          ease: serverSrs.ease,
+          interval: serverSrs.interval,
+          repetitions: serverSrs.repetitions,
+          lastReview: new Date(serverSrs.lastReview ?? serverSrs.last_review),
+          nextReview: new Date(serverSrs.nextReview ?? serverSrs.next_review),
+          quality: serverSrs.quality
+        };
+      }
+      flushQueuedReviews().then(refreshOfflineQueueLength).catch((error) => {
+        logger.warn('Failed to flush offline queue after review', { reviewId, error: (error as Error).message });
+      });
+    } catch (error) {
+      logger.warn('Review API unavailable, queuing payload', { reviewId, message: (error as Error).message, userId: baseProfile.id, cardId: currentDeckCard.id });
+      offlineQueue.add(reviewPayload);
+      refreshOfflineQueueLength();
+      toast({
+        title: 'Offline progress saved',
+        description: 'We will sync this review when connectivity returns.',
+        variant: 'destructive',
+        duration: 5000,
+      });
+      updatedCard = srsEngine.processReview(currentCard, reviewResult);
+    }
 
     // Update session
     setSession(prev => ({
@@ -132,19 +361,33 @@ export default function Practice() {
         index === prev.currentIndex ? updatedCard : card
       )
     }));
+    setAnswers(prev => [...prev, reviewResult]);
+
+    await recordProgress(updatedCard, currentDeckCard, reviewResult);
 
     // Check if session is complete
-    if (session.currentIndex >= session.cards.length - 1) {
+    if (isLastCard) {
+      const durationSeconds = Math.max(1, Math.round((Date.now() - sessionStart.getTime()) / 1000));
       setSessionComplete(true);
       setShowResults(true);
+
+      await recordStudySession({
+        correct: newCorrect,
+        incorrect: newIncorrect,
+        points: newPoints,
+        durationSeconds,
+        categories: deck?.metadata?.categories ?? (scenario ? [scenario] : []),
+        difficultyLevel: deck?.metadata?.difficultyLevel ?? getPreferredDifficulty(baseProfile),
+      });
     } else {
       // Move to next card
+      const nextDelay = overrideActive ? 0 : 1500;
       setTimeout(() => {
         setSession(prev => ({
           ...prev,
           currentIndex: prev.currentIndex + 1
         }));
-      }, 1500);
+      }, nextDelay);
     }
   };
 
@@ -172,6 +415,7 @@ export default function Practice() {
   };
 
   const getProgress = () => {
+    if (session.cards.length === 0) return 0;
     return ((session.currentIndex + 1) / session.cards.length) * 100;
   };
 
@@ -202,7 +446,23 @@ export default function Practice() {
     );
   }
 
-  if (showResults) {
+  if (!hasCards && !deckLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-cyan-50 flex items-center justify-center">
+        <Card className="max-w-md p-8">
+          <CardContent className="space-y-4 text-center">
+            <h2 className="text-2xl font-semibold text-gray-800">No cards ready yet</h2>
+            <p className="text-gray-600">
+              We couldn't find cards for this category. Try refreshing the deck or update your onboarding preferences.
+            </p>
+            <Button onClick={() => refresh()}>Refresh deck</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (sessionComplete && showResults) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-cyan-50 p-6">
         <div className="max-w-2xl mx-auto">
@@ -287,6 +547,11 @@ export default function Practice() {
               <Target className="w-4 h-4 mr-1" />
               {session.points} points
             </Badge>
+            {offlineQueueLength > 0 && (
+              <span className="text-xs text-orange-500 font-semibold ml-2">
+                {offlineQueueLength} review{offlineQueueLength > 1 ? 's' : ''} queued
+              </span>
+            )}
           </div>
         </div>
 
@@ -295,6 +560,11 @@ export default function Practice() {
           <div className="flex justify-between items-center mb-2">
             <span className="text-sm text-gray-600">
               Card {session.currentIndex + 1} of {session.cards.length}
+            {deckSource === 'fallback' && (
+              <span className="ml-2 text-xs text-orange-500">
+                (offline deck)
+              </span>
+            )}
             </span>
             <span className="text-sm text-gray-600">
               {getAccuracy()}% accuracy
@@ -332,26 +602,47 @@ export default function Practice() {
             exit={{ opacity: 0, x: -20 }}
             transition={{ duration: 0.3 }}
           >
-            <GulfaraFlashcard
-              card={{
-                id: currentCard.cardId,
-                category: scenario || 'General',
-                difficulty: srsEngine.calculateDifficulty(currentCard),
-                front: 'شلونك؟', // Mock data
-                back: 'How are you?',
-                hint: 'A common Gulf Arabic greeting',
-                example: 'شلونك؟ أنا بخير، شكراً',
-                mastery: srsEngine.calculateMastery(currentCard),
-                nextReview: currentCard.nextReview.toISOString()
-              }}
-              onAnswer={handleAnswer}
-              onNext={handleNext}
-              progress={getProgress()}
-              streak={session.streak}
-            />
+            {currentCard && currentDeckCard ? (
+              <GulfaraFlashcard
+                card={{
+                  id: currentDeckCard.id,
+                  category: currentDeckCard.category,
+                  difficulty: currentDeckCard.difficulty,
+                  front: currentDeckCard.front,
+                  back: currentDeckCard.back,
+                  hint: currentDeckCard.hint ?? '',
+                  example: currentDeckCard.example ?? '',
+                  audio: currentDeckCard.audio,
+                  mastery: srsEngine.calculateMastery(currentCard),
+                  nextReview: currentCard.nextReview.toISOString(),
+                }}
+                onAnswer={handleAnswer}
+                onNext={handleNext}
+                progress={getProgress()}
+                streak={session.streak}
+              />
+            ) : (
+              <Card className="p-6">
+                <CardContent className="text-center space-y-4">
+                  <p className="text-gray-600">
+                    We're preparing your next set of cards. Please refresh the deck or choose a different scenario.
+                  </p>
+                  <Button onClick={() => refresh()}>Refresh deck</Button>
+                </CardContent>
+              </Card>
+            )}
           </motion.div>
         </AnimatePresence>
       </div>
     </div>
   );
 }
+
+export default function Practice(props: PracticeProps = {}) {
+  return (
+    <ErrorBoundary>
+      <PracticeContent {...props} />
+    </ErrorBoundary>
+  );
+}
+

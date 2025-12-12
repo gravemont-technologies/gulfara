@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
@@ -9,10 +9,15 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Progress } from '@/components/ui/progress';
 import { ArrowRight, ArrowLeft, User, Target, BookOpen, Heart } from 'lucide-react';
+import { useSupabaseClient } from '@/supabase/client';
+import { useProfile } from '@/contexts/ProfileContext';
+import { useToast } from '@/hooks/use-toast';
+import type { ProfileRecord } from '@/hooks/useEnsureProfile';
+import { ensureDeckForProfile } from '@/services/deckManager';
 
 interface OnboardingData {
   name: string;
-  gender: 'male' | 'female' | 'other';
+  gender: 'male' | 'female';
   ageRange: '18-25' | '26-35' | '36-45' | '46-55' | '55+';
   occupation: string;
   learningGoal: string[];
@@ -29,16 +34,49 @@ const onboardingSteps = [
 
 export default function Onboarding() {
   const [currentStep, setCurrentStep] = useState(0);
-  const [data, setData] = useState<OnboardingData>({
-    name: '',
-    gender: 'male',
-    ageRange: '18-25',
-    occupation: '',
-    learningGoal: [],
-    difficultyLevel: 'A1',
-    categories: []
-  });
+  const [isSaving, setIsSaving] = useState(false);
   const navigate = useNavigate();
+  const supabase = useSupabaseClient();
+  const { profile, setProfile } = useProfile();
+  const { toast } = useToast();
+
+  const defaultData: OnboardingData = useMemo(() => {
+    const onboardingData = (profile.onboarding_data ?? {}) as Partial<OnboardingData>;
+    const categoriesFromProfile = profile.preferred_categories ?? [];
+    const goalsFromProfile = profile.learning_goals ?? [];
+
+    const resolvedGender =
+      onboardingData.gender ??
+      (profile.gender === 'female' ? 'female' : 'male');
+
+    const resolvedAge =
+      onboardingData.ageRange ??
+      (['18-25', '26-35', '36-45', '46-55', '55+'].includes(profile.age_range ?? '')
+        ? (profile.age_range as OnboardingData['ageRange'])
+        : '18-25');
+
+    const resolvedDifficulty =
+      onboardingData.difficultyLevel ??
+      (['A1', 'A2', 'B1', 'B2', 'C1'].includes(profile.difficulty_level ?? '')
+        ? (profile.difficulty_level as OnboardingData['difficultyLevel'])
+        : 'A1');
+
+    return {
+      name: onboardingData.name ?? profile.name ?? '',
+      gender: resolvedGender as OnboardingData['gender'],
+      ageRange: resolvedAge as OnboardingData['ageRange'],
+      occupation: onboardingData.occupation ?? profile.occupation ?? '',
+      learningGoal: onboardingData.learningGoal ?? goalsFromProfile,
+      difficultyLevel: resolvedDifficulty,
+      categories: onboardingData.categories ?? categoriesFromProfile,
+    };
+  }, [profile]);
+
+  const [data, setData] = useState<OnboardingData>(defaultData);
+
+  useEffect(() => {
+    setData(defaultData);
+  }, [defaultData]);
 
   const updateData = (field: keyof OnboardingData, value: any) => {
     setData(prev => ({ ...prev, [field]: value }));
@@ -48,8 +86,7 @@ export default function Onboarding() {
     if (currentStep < onboardingSteps.length - 1) {
       setCurrentStep(currentStep + 1);
     } else {
-      // Save to Supabase and navigate to dashboard
-      handleComplete();
+      void handleComplete();
     }
   };
 
@@ -60,9 +97,81 @@ export default function Onboarding() {
   };
 
   const handleComplete = async () => {
-    // TODO: Save to Supabase
-    console.log('Onboarding data:', data);
-    navigate('/app');
+    if (isSaving) return;
+    setIsSaving(true);
+
+    try {
+      const payload = {
+        name: data.name,
+        gender: data.gender,
+        age_range: data.ageRange,
+        occupation: data.occupation,
+        learning_goals: data.learningGoal,
+        difficulty_level: data.difficultyLevel,
+        preferred_categories: data.categories,
+        onboarding_completed: true,
+        onboarding_data: data,
+        preferences: {
+          categories: data.categories,
+          difficultyLevel: data.difficultyLevel,
+          learningGoal: data.learningGoal,
+        },
+      };
+
+      const { data: updatedProfile, error } = await supabase
+        .from('profiles')
+        .update(payload)
+        .eq('id', profile.id)
+        .select()
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      const nextProfile: ProfileRecord = {
+        ...profile,
+        ...updatedProfile,
+        onboarding_completed: true,
+        onboarding_data: data,
+        preferences: {
+          categories: data.categories,
+          difficultyLevel: data.difficultyLevel,
+          learningGoal: data.learningGoal,
+        },
+        learning_goals: updatedProfile?.learning_goals ?? data.learningGoal,
+        preferred_categories: updatedProfile?.preferred_categories ?? data.categories,
+      } as ProfileRecord;
+
+      setProfile(nextProfile);
+
+      try {
+        await ensureDeckForProfile(supabase, nextProfile, {
+          categories: nextProfile.preferences?.categories as string[] ?? nextProfile.preferred_categories ?? [],
+          difficultyLevel: nextProfile.preferences?.difficultyLevel as string ?? nextProfile.difficulty_level ?? data.difficultyLevel,
+          learningGoals: nextProfile.preferences?.learningGoal as string[] ?? nextProfile.learning_goals ?? data.learningGoal,
+          force: true,
+        });
+      } catch (prefetchError) {
+        console.warn('Deck prefetch failed after onboarding:', prefetchError);
+      }
+
+      toast({
+        title: 'Profile updated',
+        description: 'Your learning experience is now tailored to you.',
+      });
+
+      navigate('/app');
+    } catch (error) {
+      console.error('Failed to complete onboarding', error);
+      toast({
+        title: 'Unable to save onboarding',
+        description: 'Please try again in a moment.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const renderStep = () => {
@@ -89,35 +198,40 @@ export default function Onboarding() {
               <Label>Gender</Label>
               <RadioGroup
                 value={data.gender}
-                onValueChange={(value) => updateData('gender', value)}
-                className="mt-2"
+                onValueChange={(value) => updateData('gender', value as OnboardingData['gender'])}
+                className="mt-2 space-y-2"
               >
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="male" id="male" />
-                  <Label htmlFor="male">Male</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="female" id="female" />
-                  <Label htmlFor="female">Female</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="other" id="other" />
-                  <Label htmlFor="other">Other</Label>
-                </div>
+                {[
+                  { value: 'male', label: 'Male' },
+                  { value: 'female', label: 'Female' }
+                ].map((option) => (
+                  <Label
+                    key={option.value}
+                    htmlFor={option.value}
+                    className="flex items-center space-x-2 cursor-pointer bg-white/80 rounded-md border border-gray-200 px-3 py-2 hover:border-blue-400 transition"
+                  >
+                    <RadioGroupItem id={option.value} value={option.value} className="h-4 w-4" />
+                    <span>{option.label}</span>
+                  </Label>
+                ))}
               </RadioGroup>
             </div>
             <div>
               <Label>Age Range</Label>
               <RadioGroup
                 value={data.ageRange}
-                onValueChange={(value) => updateData('ageRange', value)}
-                className="mt-2"
+                onValueChange={(value) => updateData('ageRange', value as OnboardingData['ageRange'])}
+                className="mt-2 space-y-2"
               >
                 {['18-25', '26-35', '36-45', '46-55', '55+'].map((age) => (
-                  <div key={age} className="flex items-center space-x-2">
-                    <RadioGroupItem value={age} id={age} />
-                    <Label htmlFor={age}>{age}</Label>
-                  </div>
+                  <Label
+                    key={age}
+                    htmlFor={age}
+                    className="flex items-center space-x-2 cursor-pointer bg-white/80 rounded-md border border-gray-200 px-3 py-2 hover:border-blue-400 transition"
+                  >
+                    <RadioGroupItem value={age} id={age} className="h-4 w-4" />
+                    <span>{age}</span>
+                  </Label>
                 ))}
               </RadioGroup>
             </div>
@@ -183,39 +297,41 @@ export default function Onboarding() {
           >
             <div>
               <Label>What's your current Arabic level?</Label>
-              <div className="mt-4 space-y-4">
+              <RadioGroup
+                value={data.difficultyLevel}
+                onValueChange={(value) => updateData('difficultyLevel', value as OnboardingData['difficultyLevel'])}
+                className="mt-4 space-y-4"
+              >
                 {[
                   { level: 'A1', title: 'Beginner', desc: 'I know basic greetings and simple words' },
                   { level: 'A2', title: 'Elementary', desc: 'I can have simple conversations' },
                   { level: 'B1', title: 'Intermediate', desc: 'I can discuss familiar topics' },
                   { level: 'B2', title: 'Upper Intermediate', desc: 'I can express ideas clearly' },
                   { level: 'C1', title: 'Advanced', desc: 'I can use Arabic fluently and spontaneously' }
-                ].map((level) => (
-                  <Card
-                    key={level.level}
-                    className={`cursor-pointer transition-all ${
-                      data.difficultyLevel === level.level
-                        ? 'ring-2 ring-blue-500 bg-blue-50'
-                        : 'hover:bg-gray-50'
-                    }`}
-                    onClick={() => updateData('difficultyLevel', level.level)}
-                  >
-                    <CardContent className="p-4">
-                      <div className="flex items-center space-x-3">
-                        <RadioGroupItem
-                          value={level.level}
-                          checked={data.difficultyLevel === level.level}
-                          onChange={() => updateData('difficultyLevel', level.level)}
-                        />
-                        <div>
-                          <h3 className="font-semibold">{level.level} - {level.title}</h3>
-                          <p className="text-sm text-gray-600">{level.desc}</p>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
+                ].map((level) => {
+                  const isSelected = data.difficultyLevel === level.level;
+                  return (
+                    <Label key={level.level} className="block">
+                      <RadioGroupItem value={level.level} className="sr-only" />
+                      <Card
+                        className={`cursor-pointer transition-all ${
+                          isSelected ? 'ring-2 ring-blue-500 bg-blue-50' : 'hover:bg-gray-50'
+                        }`}
+                      >
+                        <CardContent className="p-4">
+                          <div className="flex items-center space-x-3">
+                            <div className={`w-3 h-3 rounded-full border ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-gray-300'}`} />
+                            <div>
+                              <h3 className="font-semibold">{level.level} - {level.title}</h3>
+                              <p className="text-sm text-gray-600">{level.desc}</p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </Label>
+                  );
+                })}
+              </RadioGroup>
             </div>
           </motion.div>
         );
@@ -259,7 +375,7 @@ export default function Onboarding() {
                     <CardContent className="p-4 text-center">
                       <Checkbox
                         checked={data.categories.includes(category.id)}
-                        onChange={() => {}}
+                        onCheckedChange={() => {}}
                         className="mb-2"
                       />
                       <p className="text-sm font-medium">{category.label}</p>
@@ -339,10 +455,14 @@ export default function Onboarding() {
             </Button>
             <Button
               onClick={nextStep}
-              disabled={!canProceed()}
-              className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700"
+              disabled={!canProceed() || isSaving}
+              className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 disabled:opacity-70"
             >
-              <span>{currentStep === onboardingSteps.length - 1 ? 'Complete' : 'Next'}</span>
+              <span>
+                {currentStep === onboardingSteps.length - 1
+                  ? (isSaving ? 'Saving...' : 'Complete')
+                  : 'Next'}
+              </span>
               <ArrowRight className="w-4 h-4" />
             </Button>
           </div>

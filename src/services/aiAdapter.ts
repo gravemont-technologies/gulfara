@@ -1,8 +1,9 @@
 // AI Difficulty Adaptation Service for Gulfara
 // Uses OpenAI GPT-5 nano/mini for cost-optimized difficulty adjustment
 import { costOptimizer } from './costOptimizer';
+import { logger } from '@/lib/logger';
 
-interface UserPerformance {
+export interface UserPerformance {
   userId: string;
   lastResult: boolean;
   avgScore: number;
@@ -14,6 +15,16 @@ interface UserPerformance {
   }>;
 }
 
+export interface FlashcardContext {
+  cardId: string;
+  front: string;
+  back: string;
+  hint?: string;
+  example?: string;
+  category?: string;
+  difficulty: number;
+}
+
 interface DifficultyAdjustment {
   nextDifficulty: number;
   confidence: number;
@@ -21,17 +32,14 @@ interface DifficultyAdjustment {
 }
 
 class AIAdapter {
-  private apiKey: string;
-  private baseUrl: string = 'https://api.openai.com/v1/chat/completions';
+  private baseUrl: string = import.meta.env.VITE_AI_PROXY_URL || '/api/ai-proxy';
 
-  constructor() {
-    this.apiKey = import.meta.env.VITE_OPENAI_API_KEY;
-  }
+  constructor() {}
 
   /**
    * Adjust difficulty based on user performance using GPT-5 nano (cost-optimized)
    */
-  async adjustDifficulty(performance: UserPerformance): Promise<DifficultyAdjustment> {
+  async adjustDifficulty(performance: UserPerformance, card: FlashcardContext): Promise<DifficultyAdjustment> {
     try {
       // Check cost limits before making request
       const estimatedTokens = 100; // Estimated tokens for difficulty adjustment
@@ -40,56 +48,123 @@ class AIAdapter {
         return this.fallbackAdjustment(performance);
       }
 
-      const prompt = costOptimizer.getDifficultyPrompt(performance);
       const model = costOptimizer.getOptimalModel(performance.userId, 'difficulty');
-      
+      logger.info('Difficulty adjustment request', { userId: performance.userId, model });
+
+      const openAiPayload = {
+        model,
+        input: [
+          {
+            role: 'system',
+            content: [
+              {
+                type: 'text',
+                text: [
+                  'You are an adaptive Gulf Arabic tutor.',
+                  'You receive JSON containing learner performance metrics and the flashcard that was just answered.',
+                  'Return a JSON object that matches the `gulfara_difficulty_adjustment` schema exactly.',
+                  'Do not include any additional keys or commentary.'
+                ].join(' ')
+              }
+            ]
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'input_json',
+                json: {
+                  performance: {
+                    userId: performance.userId,
+                    lastResult: performance.lastResult,
+                    avgScore: performance.avgScore,
+                    targetDifficulty: performance.targetDifficulty,
+                    recentAnswers: performance.recentAnswers
+                  },
+                  card
+                }
+              }
+            ]
+          }
+        ],
+        text: {
+          format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'gulfara_difficulty_adjustment',
+              schema: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  nextDifficulty: {
+                    type: 'number',
+                    minimum: 1,
+                    maximum: 5
+                  },
+                  confidence: {
+                    type: 'number',
+                    minimum: 0,
+                    maximum: 1
+                  },
+                  reasoning: {
+                    type: 'string',
+                    minLength: 4
+                  }
+                },
+                required: ['nextDifficulty', 'confidence', 'reasoning']
+              }
+            }
+          }
+        },
+        max_output_tokens: 180,
+        temperature: 0.2
+      };
+
+      const proxyPayload = {
+        action: 'adjustDifficulty',
+        userId: performance.userId,
+        openAiPayload,
+        requestMeta: {
+          model,
+          estimatedTokens,
+          requestType: 'difficulty'
+        }
+      };
+
       const response = await fetch(this.baseUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`
+          'x-gulfara-user-id': performance.userId
         },
-        body: JSON.stringify({
-          model,
-          messages: [
-            {
-              role: 'system',
-              content: 'Gulf Arabic tutor. Analyze performance, suggest difficulty 1-5. JSON: {"nextDifficulty":n,"confidence":n,"reasoning":"text"}'
-            },
-            {
-              role: 'user',
-              content: prompt
-            }
-          ],
-          max_tokens: 80, // Reduced for cost optimization
-          temperature: 0.3
-        })
+        body: JSON.stringify(proxyPayload)
       });
 
       if (!response.ok) {
-        throw new Error('OpenAI API request failed');
+        const errorText = await response.text();
+        console.error('AI proxy difficulty error:', response.status, errorText);
+        throw new Error(`AI proxy request failed (${response.status})`);
       }
 
       const data = await response.json();
-      const content = data.choices[0].message.content;
-      const tokensUsed = data.usage?.total_tokens || estimatedTokens;
-      
-      // Record usage for cost tracking
-      costOptimizer.recordUsage(performance.userId, tokensUsed, 'difficultyAdjustment');
-      
-      try {
-        const result = JSON.parse(content);
-        return {
-          nextDifficulty: Math.max(1, Math.min(5, result.nextDifficulty)),
-          confidence: Math.max(0, Math.min(1, result.confidence)),
-          reasoning: result.reasoning || 'AI analysis completed'
-        };
-      } catch (parseError) {
-        console.error('Failed to parse AI response:', parseError);
-        return this.fallbackAdjustment(performance);
+      const tokensUsed = typeof data.tokensUsed === 'number' ? data.tokensUsed : estimatedTokens;
+      const jsonContent = data.result ?? data;
+
+      if (!jsonContent || typeof jsonContent.nextDifficulty !== 'number') {
+        console.error('AI proxy difficulty response missing payload:', data);
+        throw new Error('Invalid difficulty response from proxy');
       }
+
+      costOptimizer.recordUsage(performance.userId, tokensUsed, 'difficultyAdjustment');
+      logger.debug('Difficulty adjustment response', { userId: performance.userId, tokensUsed, nextDifficulty: jsonContent.nextDifficulty });
+
+      return {
+        nextDifficulty: Math.max(1, Math.min(5, Number(jsonContent.nextDifficulty))),
+        confidence: Math.max(0, Math.min(1, Number(jsonContent.confidence))),
+        reasoning: typeof jsonContent.reasoning === 'string' ? jsonContent.reasoning : 'AI analysis completed'
+      };
     } catch (error) {
-      console.error('AI adaptation error:', error);
+      logger.error('AI adaptation error', { userId: performance.userId, message: (error as Error).message });
       return this.fallbackAdjustment(performance);
     }
   }
@@ -183,7 +258,7 @@ class AIAdapter {
   /**
    * Generate personalized learning recommendations using GPT-5 mini (higher quality)
    */
-  async generateRecommendations(userId: string, performance: UserPerformance): Promise<string[]> {
+  async generateRecommendations(userId: string, performance: UserPerformance, card: FlashcardContext): Promise<string[]> {
     try {
       // Check cost limits before making request
       const estimatedTokens = 150; // Estimated tokens for recommendations
@@ -192,50 +267,175 @@ class AIAdapter {
         return this.getDefaultRecommendations(performance);
       }
 
-      const prompt = costOptimizer.getRecommendationPrompt(performance);
       const model = costOptimizer.getOptimalModel(userId, 'recommendations');
-      
+
+      const payload = {
+        model,
+        input: [
+          {
+            role: 'system',
+            content: [
+              {
+                type: 'text',
+                text: [
+                  'You are a Gulf Arabic learning coach.',
+                  'Provide concise, actionable recommendations tailored to the learner.',
+                  'Return JSON matching the `gulfara_recommendations` schema only.'
+                ].join(' ')
+              }
+            ]
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'input_json',
+                json: {
+                  performance: {
+                    lastResult: performance.lastResult,
+                    avgScore: performance.avgScore,
+                    targetDifficulty: performance.targetDifficulty,
+                    recentAnswers: performance.recentAnswers
+                  },
+                  card
+                }
+              }
+            ]
+          }
+        ],
+        text: {
+          format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'gulfara_recommendations',
+              schema: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  recommendations: {
+                    type: 'array',
+                    minItems: 3,
+                    items: {
+                      type: 'string',
+                      minLength: 12
+                    }
+                  },
+                  focusArea: {
+                    type: 'string',
+                    description: 'Single phrase describing the primary theme to work on.'
+                  }
+                },
+                required: ['recommendations']
+              }
+            }
+          }
+        },
+        max_output_tokens: 220,
+        temperature: 0.4
+      };
+
+      const openAiPayload = {
+        model,
+        input: [
+          {
+            role: 'system',
+            content: [
+              {
+                type: 'text',
+                text: [
+                  'You are a Gulf Arabic learning coach.',
+                  'Provide concise, actionable recommendations tailored to the learner.',
+                  'Return JSON matching the `gulfara_recommendations` schema only.'
+                ].join(' ')
+              }
+            ]
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'input_json',
+                json: {
+                  performance: {
+                    lastResult: performance.lastResult,
+                    avgScore: performance.avgScore,
+                    targetDifficulty: performance.targetDifficulty,
+                    recentAnswers: performance.recentAnswers
+                  },
+                  card
+                }
+              }
+            ]
+          }
+        ],
+        text: {
+          format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'gulfara_recommendations',
+              schema: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  recommendations: {
+                    type: 'array',
+                    minItems: 3,
+                    items: {
+                      type: 'string',
+                      minLength: 12
+                    }
+                  },
+                  focusArea: {
+                    type: 'string',
+                    description: 'Single phrase describing the primary theme to work on.'
+                  }
+                },
+                required: ['recommendations']
+              }
+            }
+          }
+        },
+        max_output_tokens: 220,
+        temperature: 0.4
+      };
+
+      const proxyPayload = {
+        action: 'generateRecommendations',
+        userId,
+        openAiPayload,
+        requestMeta: {
+          model,
+          estimatedTokens,
+          requestType: 'recommendations'
+        }
+      };
+
       const response = await fetch(this.baseUrl, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`
+          'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          model,
-          messages: [
-            {
-              role: 'system',
-              content: 'Arabic tutor. Give 3 Gulf Arabic learning tips. JSON array: ["tip1","tip2","tip3"]'
-            },
-            {
-              role: 'user',
-              content: prompt
-            }
-          ],
-          max_tokens: 120, // Reduced for cost optimization
-          temperature: 0.4
-        })
+        body: JSON.stringify(proxyPayload)
       });
 
       if (!response.ok) {
-        throw new Error('OpenAI API request failed');
+        const errorText = await response.text();
+        console.error('AI proxy recommendations error:', response.status, errorText);
+        throw new Error(`AI proxy request failed (${response.status})`);
       }
 
       const data = await response.json();
-      const content = data.choices[0].message.content;
-      const tokensUsed = data.usage?.total_tokens || estimatedTokens;
-      
-      // Record usage for cost tracking
-      costOptimizer.recordUsage(userId, tokensUsed, 'recommendations');
-      
-      try {
-        const recommendations = JSON.parse(content);
-        return Array.isArray(recommendations) ? recommendations.slice(0, 3) : this.getDefaultRecommendations(performance);
-      } catch (parseError) {
-        console.error('Failed to parse AI recommendations:', parseError);
-        return this.getDefaultRecommendations(performance);
+      const tokensUsed = typeof data.tokensUsed === 'number' ? data.tokensUsed : estimatedTokens;
+      const jsonContent = data.result ?? data;
+
+      if (!jsonContent || !Array.isArray(jsonContent.recommendations)) {
+        console.error('AI proxy recommendation response missing payload:', data);
+        throw new Error('Invalid recommendation response from proxy');
       }
+
+      costOptimizer.recordUsage(userId, tokensUsed, 'recommendations');
+
+      return jsonContent.recommendations.slice(0, 5).map((tip: unknown) => String(tip));
     } catch (error) {
       console.error('Recommendation generation error:', error);
       return this.getDefaultRecommendations(performance);
@@ -284,4 +484,3 @@ class AIAdapter {
 }
 
 export const aiAdapter = new AIAdapter();
-export type { UserPerformance, DifficultyAdjustment };

@@ -1,17 +1,20 @@
 // api/sync.ts (Vite serverless function on Vercel)
-import { createClient } from '@supabase/supabase-js'; // Assume installed
-import { syncFunction } from '../services/sync'; // Adapt from your sync.js
+// ARCHIVED: Supabase removed. Replace with Firebase/Firestore persistence.
+
+import { adminDb } from '../lib/firebase/admin'
 
 export default async function handler(req: Request) {
-  if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 });
+  if (req.method !== 'GET') {
+    return new Response('Method Not Allowed', { status: 405 });
+  }
 
-  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-  // Example: Aggregate data from Supabase or other APIs
-  const { data, error } = await supabase.from('decks').select('*'); // Adapt to your schema
-  if (error) return new Response(JSON.stringify({ error }), { status: 500 });
+  // TODO: Replace with Firebase/Firestore sync logic. Defer admin init
+  // until actual persistence work is required so tests that exercise
+  // request handling do not fail when admin env is absent.
+  console.warn('sync handler: Supabase removed, implement Firebase persistence.');
 
-  // Call your sync logic if needed
-  const syncedData = await syncFunction(data);
-
-  return new Response(JSON.stringify(syncedData), { status: 200 });
+  return new Response(JSON.stringify({ data: [], message: 'Sync endpoint stubbed during migration' }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }

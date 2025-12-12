@@ -17,11 +17,15 @@ import {
   Bell,
   Target
 } from 'lucide-react';
+import { useClerk } from '@clerk/clerk-react';
+import { useProfile } from '@/contexts/ProfileContext';
 
 export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { signOut } = useClerk();
+  const { profile } = useProfile();
 
   const navigation = [
     { name: 'Dashboard', href: '/app', icon: Home },
@@ -37,9 +41,9 @@ export default function Layout() {
     return location.pathname.startsWith(path);
   };
 
-  const handleLogout = () => {
-    // TODO: Implement logout logic
-    navigate('/');
+  const handleLogout = async () => {
+    await signOut();
+    navigate('/sign-in', { replace: true });
   };
 
   return (
@@ -153,14 +157,24 @@ export default function Layout() {
               {/* User menu */}
               <div className="flex items-center space-x-4">
                 <div className="text-right hidden sm:block">
-                  <p className="text-sm font-medium text-gray-800">Ahmed Al-Rashid</p>
-                  <p className="text-xs text-gray-600">Level 3 • 1,250 pts</p>
+                  <p className="text-sm font-medium text-gray-800">
+                    {profile.name ?? 'Learner'}
+                  </p>
+                  <p className="text-xs text-gray-600">
+                    {profile.total_points ?? 0} pts • {profile.coins ?? 0} coins
+                  </p>
                 </div>
                 
                 <Avatar className="w-8 h-8">
-                  <AvatarImage src="/api/placeholder/32/32" />
+                  <AvatarImage src={profile.avatar_url ?? undefined} />
                   <AvatarFallback className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white text-sm">
-                    AR
+                    {profile.name
+                      ?.split(' ')
+                      .map(word => word[0])
+                      .filter(Boolean)
+                      .slice(0, 2)
+                      .join('')
+                      .toUpperCase() || 'GF'}
                   </AvatarFallback>
                 </Avatar>
               </div>

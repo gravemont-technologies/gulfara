@@ -1,5 +1,6 @@
 // Spaced Repetition System (SM-2 Algorithm) for Gulfara
 // Implements the SuperMemo SM-2 algorithm for optimal learning intervals
+import { logger } from '@/lib/logger';
 
 interface SRSData {
   cardId: string;
@@ -171,7 +172,14 @@ class SRSEngine {
    */
   processReview(srsData: SRSData, result: ReviewResult): SRSData {
     const quality = this.mapResultToQuality(result);
-    return this.calculateNextReview(srsData, quality);
+    const updated = this.calculateNextReview(srsData, quality);
+    logger.debug('SRS slot updated', {
+      cardId: updated.cardId,
+      interval: updated.interval,
+      ease: updated.ease,
+      nextReview: updated.nextReview.toISOString()
+    });
+    return updated;
   }
 
   /**

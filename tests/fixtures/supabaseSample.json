@@ -1,0 +1,17 @@
+[
+  {
+    "id": "deck_1",
+    "title": "Greetings",
+    "category": "Family",
+    "cards": 24,
+    "updated_at": "2025-01-10T00:00:00.000Z"
+  },
+  {
+    "id": "deck_2",
+    "title": "Travel Essentials",
+    "category": "Travel",
+    "cards": 18,
+    "updated_at": "2025-01-09T00:00:00.000Z"
+  }
+]
+

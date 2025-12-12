@@ -6,10 +6,17 @@ import { ClerkProvider } from '@clerk/clerk-react';
 
 const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
-ReactDOM.createRoot(document.getElementById('root')).render(
+const root = document.getElementById('root');
+if (!root) throw new Error('Root element not found');
+
+ReactDOM.createRoot(root).render(
   <React.StrictMode>
-    <ClerkProvider publishableKey={publishableKey}>
+    {publishableKey ? (
+      <ClerkProvider publishableKey={publishableKey}>
+        <App />
+      </ClerkProvider>
+    ) : (
       <App />
-    </ClerkProvider>
+    )}
   </React.StrictMode>
 );

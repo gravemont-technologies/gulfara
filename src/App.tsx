@@ -5,7 +5,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { LanguageProvider } from "./contexts/LanguageContext";
+import { ThemeProvider } from "./contexts/ThemeContext";
 import GulfaraLanding from "./pages/GulfaraLanding";
+import SignInPage from "./pages/SignInPage";
+import SignUpPage from "./pages/SignUpPage";
+import { ProtectedRoute } from "./components/auth/ProtectedRoute";
 
 // Lazy load components for better performance
 const Layout = lazy(() => import('./components/Layout'));
@@ -36,30 +40,53 @@ const GulfaraLoader = () => (
 );
 
 const App = () => {
+  const basePath =
+    import.meta.env.MODE === 'development'
+      ? '/'
+      : (import.meta.env.BASE_URL ?? '/');
+
   return (
     <QueryClientProvider client={queryClient}>
-      <LanguageProvider>
-        <TooltipProvider>
-          <Toaster />
-          <Sonner />
-          <BrowserRouter>
-            <Suspense fallback={<GulfaraLoader />}>
-              <div className="min-h-screen bg-white">
-                <Routes>
-                  <Route path="/" element={<GulfaraLanding />} />
-                  <Route path="/onboarding" element={<Onboarding />} />
-                  <Route path="/app" element={<Layout />}>
-                    <Route index element={<Dashboard />} />
-                    <Route path="practice/:scenario" element={<Practice />} />
-                    <Route path="profile" element={<Profile />} />
-                    <Route path="rewards" element={<Rewards />} />
-                  </Route>
-                </Routes>
-              </div>
-            </Suspense>
-          </BrowserRouter>
-        </TooltipProvider>
-      </LanguageProvider>
+      <ThemeProvider>
+        <LanguageProvider>
+          <TooltipProvider>
+            <Toaster />
+            <Sonner />
+            <BrowserRouter basename={basePath}>
+              <Suspense fallback={<GulfaraLoader />}>
+                <div className="min-h-screen bg-white dark:bg-slate-950">
+                  <Routes>
+                    <Route path="/" element={<GulfaraLanding />} />
+                    <Route path="/sign-in" element={<SignInPage />} />
+                    <Route path="/sign-up" element={<SignUpPage />} />
+                    <Route
+                      path="/onboarding"
+                      element={
+                        <ProtectedRoute>
+                          <Onboarding />
+                        </ProtectedRoute>
+                      }
+                    />
+                    <Route
+                      path="/app"
+                      element={
+                        <ProtectedRoute>
+                          <Layout />
+                        </ProtectedRoute>
+                      }
+                    >
+                      <Route index element={<Dashboard />} />
+                      <Route path="practice/:scenario" element={<Practice />} />
+                      <Route path="profile" element={<Profile />} />
+                      <Route path="rewards" element={<Rewards />} />
+                    </Route>
+                  </Routes>
+                </div>
+              </Suspense>
+            </BrowserRouter>
+          </TooltipProvider>
+        </LanguageProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 };

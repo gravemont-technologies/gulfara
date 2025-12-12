@@ -146,7 +146,7 @@
 
 #### Configuration
 - `package.json` - Dependencies and scripts
-- `backend.env` - Environment variables
+- `.env` - Consolidated environment variables
 - `supabase-schema.sql` - Database schema
 - `src/content/flashcards.json` - Learning content
 
@@ -190,7 +190,7 @@
 - Get Supabase URL and keys
 - Get Clerk publishable and secret keys
 - Get OpenAI API key
-- Create `.env` file (frontend) and `backend.env` (server)
+- Create `.env` file (frontend + server local secrets)
 
 #### 2. **Database Setup** (10 minutes)
 - Run `supabase-schema.sql` in Supabase

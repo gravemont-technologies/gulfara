@@ -92,9 +92,9 @@ export default function GulfaraLanding() {
               variant="outline"
               size="lg"
               className="border-2 border-blue-600 text-blue-600 hover:bg-blue-50 px-8 py-4 text-lg font-semibold"
-              onClick={() => navigate('/app')}
+              onClick={() => navigate('/onboarding')}
             >
-              {currentContent.demo}
+              {language === 'en' ? 'Continue Onboarding' : 'أكمل التهيئة'}
             </Button>
           </motion.div>
 

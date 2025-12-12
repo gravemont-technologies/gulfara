@@ -22,6 +22,10 @@ CREATE TABLE profiles (
   streak INTEGER DEFAULT 0,
   total_study_time INTEGER DEFAULT 0, -- in minutes
   average_accuracy DECIMAL(5,2) DEFAULT 0.00,
+  coins INTEGER DEFAULT 1000,
+  onboarding_completed BOOLEAN DEFAULT FALSE,
+  onboarding_data JSONB,
+  preferences JSONB,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -50,6 +54,18 @@ CREATE TABLE flashcards (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+CREATE TABLE user_decks (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+  seed_id TEXT,
+  deck JSONB NOT NULL,
+  categories TEXT[] NOT NULL,
+  difficulty_level TEXT,
+  generated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_user_decks_user_id ON user_decks(user_id);
 
 -- User progress tracking (SRS data)
 CREATE TABLE user_progress (

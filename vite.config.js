@@ -2,11 +2,17 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), '');
+
+  const productionBase =
+    env.VITE_APP_BASE_PATH ||
+    env.BASE_PATH ||
+    '/';
+
   return {
     plugins: [react()],
-    base: '/gulf-arabic-flashcards/',
+    base: command === 'serve' ? '/' : productionBase,
     server: {
       port: 5173,
       open: true,
@@ -18,7 +24,6 @@ export default defineConfig(({ mode }) => {
       },
       extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
     },
-    // REMOVE the entire optimizeDeps section - Vite handles this automatically
     build: {
       target: 'esnext',
       minify: 'esbuild',
@@ -34,8 +39,6 @@ export default defineConfig(({ mode }) => {
       },
     },
     define: {
-      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL),
-      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(env.VITE_SUPABASE_ANON_KEY),
       'import.meta.env.VITE_CLERK_PUBLISHABLE_KEY': JSON.stringify(env.VITE_CLERK_PUBLISHABLE_KEY),
       'import.meta.env.VITE_UPDATE_HABIT_URL': JSON.stringify(env.VITE_UPDATE_HABIT_URL),
     },

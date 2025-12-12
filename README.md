@@ -1,6 +1,6 @@
 # Gulfara - Adaptive Gulf Arabic Flashcards
 
-A production-grade, AI-powered flashcard application for learning Gulf Arabic through real-life scenarios. Built with modern React, TypeScript, and cutting-edge technologies.
+An AI-powered flashcard application for Gulf Arabic, now back-ended by Firebase/Firestore. The prior Supabase documentation and edge functions have been archived under `archive/supabase-migration/` for reference.
 
 ## 🌟 Features
 
@@ -21,7 +21,7 @@ A production-grade, AI-powered flashcard application for learning Gulf Arabic th
 ### Technical Features
 - **Modern Stack**: React 18, TypeScript, Vite, TailwindCSS
 - **Authentication**: Clerk integration for secure user management
-- **Database**: Supabase with PostgreSQL and real-time features
+- **Database**: Firebase Firestore (Supabase artifacts archived in `archive/supabase-migration/`)
 - **AI Integration**: Vercel AI SDK for adaptive learning
 - **Responsive Design**: Mobile-first, Apple-inspired UI
 - **Performance**: Optimized for LCP ≤2.2s, CLS ≤0.02
@@ -29,57 +29,76 @@ A production-grade, AI-powered flashcard application for learning Gulf Arabic th
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Node.js 18+ 
+- Node.js 18+
 - npm or yarn
-- Supabase account
-- Clerk account
-- Vercel AI API key
 
-### Installation
+### Environment Setup
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd gulfara
-   ```
+1. **Quick setup (recommended)** – run `setup-env.bat` on Windows or `chmod +x setup-env.sh && ./setup-env.sh` on macOS/Linux to bootstrap `.env` from the template so you can focus on filling secrets.
+2. **Manual setup** – copy the template yourself if you prefer:
+  ```bash
+  cp env.template .env
+  ```
+3. **Frontend `.env`** – only publishable/browser-safe values belong here:
+  ```env
+  NEXT_PUBLIC_FIREBASE_API_KEY=your_firebase_api_key
+  NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
+  NEXT_PUBLIC_FIREBASE_PROJECT_ID=your_project_id
+  NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=your_project.appspot.com
+  NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
+  NEXT_PUBLIC_FIREBASE_APP_ID=your_app_id
+  NEXT_PUBLIC_USE_FIREBASE=true
+  NEXT_PUBLIC_DUAL_WRITE_MODE=false
+  VITE_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
+  VITE_USE_EDGE_REVIEW=true
+  VITE_USE_EDGE_AI_PROXY=true
+  VITE_APP_BASE_URL=http://localhost:5200
+  VITE_APP_BASE_PATH=/
+  ```
+4. **Single `.env` for local dev** – this repository uses one local `.env` file that contains both public and server-only values for local development. Keep `.env` gitignored and use a secure vault for production secrets. Example server/private fields to add to `.env`:
+  ```env
+  FIREBASE_ADMIN_PROJECT_ID=your_project_id
+  FIREBASE_ADMIN_CLIENT_EMAIL=firebase-adminsdk@your_project.iam.gserviceaccount.com
+  FIREBASE_ADMIN_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYOUR_PRIVATE_KEY\n-----END PRIVATE KEY-----\n"
+  CLERK_JWKS_URL=https://clerk.static-accounts.com/jwks
+  CLERK_API_KEY=optional_clerk_api_key_when_using_server_sdk
+  OPENAI_API_KEY=your_openai_api_key
+  OPENAI_USER_MONTHLY_CAP=1000
+  ```
+5. **Preflight validation** – once secrets are configured, verify readiness and lint/build health:
+  ```bash
+  npm run env:status   # confirms Firebase/Clerk/OpenAI flags
+  npm run preflight    # lint + build + env readiness
+  ```
 
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
+### Database Setup
+- Firestore rules live in `firestore.rules`, indexes in `firestore.indexes.json`, and can be deployed via `npx firebase deploy --only firestore:rules,firestore:indexes`.
+- Configure the `gulfara-cards` Firebase project (Auth + Firestore) in the Firebase Console and manage the admin credentials in a vault.
+- During local development, run `npx firebase emulators:start --only firestore,auth` and point `FIRESTORE_EMULATOR_HOST` / `FIREBASE_AUTH_EMULATOR_HOST` at the emulator ports to keep tests isolated.
+- Import the flashcard data from `src/content/flashcards.json` into Firestore or use the emulator suite to seed the collections.
 
-3. **Environment Setup**
-   ```bash
-   cp backend.env backend.env   # keep backend.env for server-side secrets
-   cp env .env                  # use .env for frontend publishables
-   ```
-   
-   Fill in your environment variables:
-   ```env
-   # Supabase Configuration
-   VITE_SUPABASE_URL=your_supabase_project_url
-   VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
-   
-   # Clerk Authentication
-   VITE_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
-   CLERK_SECRET_KEY=your_clerk_secret_key
-   
-   # Vercel AI SDK
-   VITE_VERCEL_AI_API_KEY=your_vercel_ai_api_key
-   
-   # App Configuration (in .env)
-   VITE_APP_BASE_URL=http://localhost:5173
-   ```
+### Start Development Server
+```bash
+npm run dev
+```
 
-4. **Database Setup**
-   - Create a new Supabase project
-   - Run the SQL schema from `supabase-schema.sql`
-   - Import the flashcard data from `src/content/flashcards.json`
+## ✅ Testing
 
-5. **Start Development Server**
-   ```bash
-   npm run dev
-   ```
+Run the suites individually or through the CI bundle:
+
+- **Unit tests (Vitest):** `npm run test:unit`
+- **Integration tests (React flows, Supabase/Clerk mocks):** `npm run test:integration`
+- **API/contract tests (/api/sync):** `npm run test:api`
+- **Smoke tests (Playwright chromium only):** `npm run test:smoke`
+- **Full end-to-end matrix:** `npm run test:e2e`
+- **CI sequence (lint + all critical suites):** `npm run test:ci`
+
+Artifacts are emitted to `.test-reports/`:
+
+- Coverage: `.test-reports/coverage`
+- Playwright traces/report: `.test-reports/playwright` & `.test-reports/playwright-report`
+
+> Tip: run `npm run playwright:install` once per machine to download the required browsers.
 
 ## 🏗️ Architecture
 
@@ -200,17 +219,31 @@ npm run format       # Format code
 
 ### Vercel Deployment
 1. Connect your GitHub repository to Vercel
-2. Set environment variables in Vercel dashboard
-3. Deploy automatically on push to main branch
+2. Set the frontend environment variables listed above inside Vercel and configure private secrets in your secret manager or populate them in the local `.env` for development.
+3. Deploy automatically on push to `main`.
+4. After Vercel builds, run the Supabase commands to deploy the Edge functions:
+  ```bash
+  supabase functions deploy review --project <your-project-ref>
+  supabase functions deploy ai-proxy --project <your-project-ref>
+  ```
 
 ### Environment Variables for Production
 ```env
 VITE_SUPABASE_URL=your_production_supabase_url
 VITE_SUPABASE_ANON_KEY=your_production_anon_key
 VITE_CLERK_PUBLISHABLE_KEY=your_production_clerk_key
-CLERK_SECRET_KEY=your_production_clerk_secret
-VITE_VERCEL_AI_API_KEY=your_vercel_ai_api_key
+VITE_USE_EDGE_REVIEW=true
+VITE_USE_EDGE_AI_PROXY=true
 VITE_APP_BASE_URL=https://your-domain.vercel.app
+```
+
+Backend secrets (set via Supabase CLI or directly in the Supabase dashboard):
+```env
+SUPABASE_URL=https://your-production-instance.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+CLERK_JWKS_URL=https://clerk.static-accounts.com/jwks
+OPENAI_API_KEY=your_production_openai_key
+OPENAI_USER_MONTHLY_CAP=1000
 ```
 
 ## 📱 Mobile Support

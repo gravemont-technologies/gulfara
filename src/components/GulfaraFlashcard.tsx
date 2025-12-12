@@ -5,23 +5,18 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { RotateCcw, CheckCircle, XCircle, Lightbulb, Volume2 } from 'lucide-react';
+import { FlashcardContext } from '@/services/aiAdapter';
 
-interface FlashcardData {
+export interface FlashcardData extends Omit<FlashcardContext, 'difficulty'> {
   id: string;
-  category: string;
   difficulty: number;
-  front: string;
-  back: string;
-  hint: string;
-  example: string;
-  audio?: string;
   mastery: number;
   nextReview: string;
 }
 
 interface GulfaraFlashcardProps {
   card: FlashcardData;
-  onAnswer: (correct: boolean, timeSpent: number) => void;
+  onAnswer: (correct: boolean, timeSpent: number, context: FlashcardContext) => void;
   onNext: () => void;
   progress: number;
   streak: number;
@@ -36,8 +31,9 @@ export default function GulfaraFlashcard({
 }: GulfaraFlashcardProps) {
   const [isFlipped, setIsFlipped] = useState(false);
   const [showHint, setShowHint] = useState(false);
+  const [isRevealed, setIsRevealed] = useState(false);
   const [timeSpent, setTimeSpent] = useState(0);
-  const [startTime] = useState(() => Date.now());
+  const [startTime, setStartTime] = useState(() => Date.now());
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -47,12 +43,28 @@ export default function GulfaraFlashcard({
     return () => clearInterval(timer);
   }, [startTime]);
 
+  useEffect(() => {
+    setIsFlipped(false);
+    setShowHint(false);
+    setIsRevealed(false);
+    setTimeSpent(0);
+    setStartTime(Date.now());
+  }, [card.id]);
+
   const handleFlip = () => {
     setIsFlipped(true);
   };
 
   const handleAnswer = (correct: boolean) => {
-    onAnswer(correct, timeSpent);
+    onAnswer(correct, timeSpent, {
+      cardId: card.id,
+      front: card.front,
+      back: card.back,
+      hint: card.hint,
+      example: card.example,
+      category: card.category,
+      difficulty: card.difficulty,
+    });
     setTimeout(() => {
       onNext();
     }, 1500);
@@ -115,9 +127,8 @@ export default function GulfaraFlashcard({
                   {card.category}
                 </Badge>
               </div>
-              
-              <motion.h2 
-                className="text-3xl font-bold text-gray-800 mb-6"
+              <motion.h2
+                className={`text-3xl font-bold text-gray-800 mb-6 transition ${isRevealed ? 'blur-0' : 'blur-md select-none'}`}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.2 }}
@@ -137,14 +148,23 @@ export default function GulfaraFlashcard({
                 </Button>
               )}
 
-              <div className="space-y-4">
-                <Button
-                  onClick={handleFlip}
-                  className="bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700"
-                >
-                  Show Answer
-                </Button>
-                
+              <div className="space-y-3 w-full">
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <Button
+                    onClick={() => setIsRevealed(true)}
+                    variant={isRevealed ? 'secondary' : 'default'}
+                    className="flex-1 bg-gradient-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 text-white"
+                  >
+                    {isRevealed ? 'Word Revealed' : 'Reveal Word'}
+                  </Button>
+                  <Button
+                    onClick={handleFlip}
+                    className="flex-1 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700"
+                  >
+                    Show English
+                  </Button>
+                </div>
+
                 <Button
                   variant="outline"
                   onClick={() => setShowHint(!showHint)}
