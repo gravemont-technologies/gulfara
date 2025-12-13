@@ -1,0 +1,37 @@
+# gcp/network-contract.yaml — declarative network & secrets contract (template)
+# Purpose: describe VPC, subnets, serverless connector, and required secrets/IAM bindings.
+
+project: gulfara-prod
+region: us-central1
+
+vpc:
+  name: gulfara-network
+  auto_create_subnetworks: false
+  subnets:
+    - name: private-subnet
+      region: us-central1
+      ip_cidr_range: 10.10.0.0/16
+    - name: exchange-subnet
+      region: us-central1
+      ip_cidr_range: 10.11.0.0/16
+
+connectors:
+  - name: cloud-run-sql-connector
+    region: us-central1
+    ip_cidr_range: 10.10.8.0/28
+
+secrets:
+  - name: firebase-service-account
+    replication: automatic
+  - name: supabase-service-role-key
+    replication: automatic
+
+iam_bindings:
+  - role: roles/run.invoker
+    members:
+      - serviceAccount:gulfara-cloud-run@gcp-project.iam.gserviceaccount.com
+  - role: roles/secretmanager.secretAccessor
+    members:
+      - serviceAccount:gulfara-cloud-run@gcp-project.iam.gserviceaccount.com
+
+# This template is consumed by `scripts/generate-terraform.ts` and validated by `scripts/validate-infrastructure.sh`

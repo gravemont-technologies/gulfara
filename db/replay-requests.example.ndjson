@@ -1,0 +1,2 @@
+{"name":"review-card","method":"POST","path":"/functions/v1/review","headers":{"Authorization":"Bearer <token>"},"body":{"userId":"<user-id>","cardId":"<card-id>","quality":5}}
+{"name":"fetch-progress","method":"GET","path":"/functions/v1/progress?userId=<user-id>"}

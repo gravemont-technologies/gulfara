@@ -1,0 +1,12 @@
+connectorId: example
+generate:
+  adminNodeSdk:
+    - outputDir: ..\..\gulfara\src\dataconnect-admin-generated
+      package: "@dataconnect/admin-generated"
+      packageJsonDir: ..\..\gulfara
+  javascriptSdk:
+    - outputDir: ..\..\gulfara\src\dataconnect-generated
+      package: "@dataconnect/generated"
+      packageJsonDir: ..\..\gulfara
+      react: true
+      angular: false
