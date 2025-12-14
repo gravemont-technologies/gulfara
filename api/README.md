@@ -16,6 +16,14 @@ Endpoints
 - GET /api/helloWorld — returns 200 if `kill_switch/helloWorld` doc is enabled, 503 when disabled.
 - POST /api/logBlocked — accepts JSON body with `action` and optional `details`, writes to `blocked_actions`.
 
+Security note: you can protect the ingestion endpoint with a simple API key. Set a Vercel environment variable `LOGBLOCKED_API_KEY` (a short random string). When set, the endpoint requires the header `x-api-key: <value>` or query param `?api_key=<value>`.
+
+Example curl with header:
+```bash
+curl -X POST -H "Content-Type: application/json" -H "x-api-key: $LOGBLOCKED_API_KEY" \
+   -d '{"action":"test","details":{"info":"x"}}' https://<project>.vercel.app/api/logBlocked
+```
+
 Quick curl checks (after deploying preview and setting secret):
 curl -i https://<project>.vercel.app/api/helloWorld
 

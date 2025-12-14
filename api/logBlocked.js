@@ -11,6 +11,16 @@ function initAdmin() {
 
 module.exports = async (req, res) => {
   try {
+    // optional API key protection: if LOGBLOCKED_API_KEY is set, require it
+    const expectedKey = process.env.LOGBLOCKED_API_KEY;
+    if (expectedKey) {
+      const got = (req.headers && (req.headers['x-api-key'] || req.headers['X-API-KEY'] || req.headers['x-api-key'])) || req.query['api_key'] || null;
+      if (!got || got !== expectedKey) {
+        res.status(401).json({ ok: false, error: 'unauthorized' });
+        return;
+      }
+    }
+
     const adminSdk = initAdmin();
     const db = adminSdk.firestore();
     const body = req.body || {};
