@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.log
+*.log
+functions/*.log
+functions/firebase-debug.log
+functions/tsc.log
+tsc.log
+firestore-debug.log
+tmp_patch_repo/
