@@ -1,0 +1,41 @@
+version: '3.9'
+services:
+  postgres:
+    image: supabase/postgres:15
+    environment:
+      POSTGRES_DB: gulfara
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  mock-jwks:
+    image: jwks-mock:latest
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/.well-known/jwks.json"]
+      interval: 30s
+      retries: 5
+
+  supabase-seeder:
+    image: ghcr.io/supabase/cli:latest
+    env_file:
+      - .env
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    entrypoint: ["bash", "/workspace/scripts/seed-staging.sh"]
+    depends_on:
+      - postgres
+
+volumes:
+  pgdata:
+
+# Usage:
+# 1. Start the stack: `docker compose -f docker-compose.staging.yml up -d`
+# 2. Seed data: `docker compose -f docker-compose.staging.yml run --rm supabase-seeder`
+#    (runs `supabase db reset && supabase db push && supabase functions deploy`).
+# 3. Replay production requests via `npm run replay:requests` once `.env` contains REPLAY_* URLs.
