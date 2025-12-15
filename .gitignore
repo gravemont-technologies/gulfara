@@ -9,3 +9,11 @@ functions/tsc.log
 tsc.log
 firestore-debug.log
 tmp_patch_repo/
+# ignore envs and local secret files
+gulfara/.env
+functions/.env
+.env
+.DS_Store
+node_modules/
+# keep log files out of git
+*.log
