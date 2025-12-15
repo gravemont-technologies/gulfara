@@ -1,0 +1,26 @@
+#!/bin/sh
+# Husky pre-commit hook: block commits with hardcoded secrets
+
+# List of secret patterns to block (regex)
+SECRET_PATTERNS=(
+  "OPENAI_API_KEY=.*sk-"
+  "FIREBASE_ADMIN_KEY=.*[A-Za-z0-9/+]{50,}"
+  "LOGBLOCKED_API_KEY=.*[A-Za-z0-9]{20,}"
+  "-----BEGIN.*PRIVATE.*KEY-----"
+  "password.*=.*[A-Za-z0-9]{8,}"
+)
+
+echo "🔒 Running secret-scan pre-commit hook..."
+
+# Check staged files for secret patterns
+for pattern in "${SECRET_PATTERNS[@]}"; do
+  if git diff --cached | grep -iE "$pattern" > /dev/null; then
+    echo "❌ ERROR: Potential secret detected in staged changes"
+    echo "   Pattern: $pattern"
+    echo "   Commit blocked. Remove the secret and try again."
+    exit 1
+  fi
+done
+
+echo "✅ No secrets detected. Proceeding with commit."
+exit 0
